@@ -19,6 +19,14 @@ $VerbosePreference = 'Continue'
 
 . ./add-in.ps1
 
+function ConvertTo-JsonEscape($table) {
+	(ConvertTo-Json -Compress $table) -replace '"','\"'
+}
+
+function ConvertTo-FormUrlEncoded($table) {
+	[string]::join('&', ($table.keys | ForEach-Object { "$([Web.HttpUtility]::urlencode($_))=$([Web.HttpUtility]::urlencode($table[$_]))" }))
+}
+
 write-verbose "Reading scan request file ($scanRequestFilePath)..."
 $scanRequestConfig = Get-Config $scanRequestFilePath
 
@@ -51,23 +59,16 @@ $tokenBody = @{
 	'client_id'='resource_owner_client'
 	'client_secret'=$clientSecret
 }
-
-$tokenResponse = Invoke-RestMethod -Uri $tokenUrl `
-	-Method Post `
-	-Body $tokenBody
+$tokenBodyContent = ConvertTo-FormUrlEncoded $tokenBody
+$tokenResponse = curl -s -X POST $tokenUrl -d $tokenBodyContent | ConvertFrom-Json
 
 $accessToken = $tokenResponse.access_token
-
-$authorizationHeader = @{
-	'Authorization' = "Bearer $accessToken"
-}
 
 $inputDirectory = join-path $scanRequestConfig.request.workdirectory 'input'
 $sourcePath = (Get-ChildItem $inputDirectory | Select-Object -First 1).FullName
 
 write-verbose "Step 2: Uploading source $sourcePath..."
-$form = @{zippedSource=(Get-ChildItem $sourcePath)}
-Invoke-RestMethod "$checkmarxBaseUrl/cxrestapi/projects/$checkmarxProjectId/sourceCode/attachments" -Method Post -Form $form -Headers @{Authorization="Bearer $accessToken"}
+curl -X POST -H "Authorization: Bearer $accessToken" --form "zippedSource=@$(Get-ChildItem $sourcePath)" "$checkmarxBaseUrl/cxrestapi/projects/$checkmarxProjectId/sourceCode/attachments"
 
 write-verbose 'Step 3: Starting scan...'
 $startScanUrl = "$checkmarxBaseUrl/cxrestapi/sast/scans"
@@ -80,11 +81,7 @@ $startScanBody = @{
 	'comment' = "$checkmarxProjectId"
 }
 
-$startScanResponse = Invoke-RestMethod -Uri $startScanUrl `
-	-Method Post `
-	-Body (ConvertTo-Json $startScanBody) `
-	-Header $authorizationHeader `
-	-ContentType 'application/json'
+$startScanResponse = curl -s -X POST -H "Authorization: Bearer $accessToken" -H "Content-Type: application/json" -d "$(ConvertTo-JsonEscape $startScanBody)" $startScanUrl | ConvertFrom-Json
 
 $scanId = $startScanResponse.id
 
@@ -92,16 +89,12 @@ $waitForCompletionSleepTimeInSeconds = $scanRequestConfig.scan.checkscanstatusde
 write-verbose "Step 4: Wait for scan to complete (using check-status delay $($waitForCompletionSleepTimeInSeconds))..."
 
 $waitForScanUrl = "$checkmarxBaseUrl/cxrestapi/sast/scans/$scanId"
-$waitForScanResponse = Invoke-RestMethod -Uri $waitForScanUrl `
-	-Method Get `
-	-Header $authorizationHeader
+$waitForScanResponse = curl -s -H "Authorization: Bearer $accessToken" $waitForScanUrl | ConvertFrom-Json
 
 while ($waitForScanResponse.status.name -ne 'Finished') {
 	write-verbose "  Waiting for scan completion..."
 	Start-Sleep -seconds $waitForCompletionSleepTimeInSeconds
-	$waitForScanResponse = Invoke-RestMethod -Uri $waitForScanUrl `
-		-Method Get `
-		-Header $authorizationHeader
+	$waitForScanResponse = curl -s -H "Authorization: Bearer $accessToken" $waitForScanUrl | ConvertFrom-Json
 }
 
 write-verbose 'Step 5: Creating new XML report...'
@@ -112,34 +105,28 @@ $createReportBody = @{
 	'scanId' = "$scanId"
 }
 
-$createReportResponse = Invoke-RestMethod -Uri $createReportUrl `
-	-Method Post `
-	-Header $authorizationHeader `
-	-Body $createReportBody
+# Note: Current documentation shows this as an application/json content-type (instead of application/x-www-form-urlencoded)
+#       Switch to application/json if required
+$createReportBodyContent = ConvertTo-FormUrlEncoded $createReportBody
+$createReportResponse = curl -s -H "Authorization: Bearer $accessToken" -X POST $createReportUrl -d $createReportBodyContent | ConvertFrom-Json
 
 $reportId = $createReportResponse.reportId
 
 write-verbose 'Step 6: Waiting for report to complete...'
 $getReportStatusUrl = "$checkmarxBaseUrl/cxrestapi/reports/sastScan/$reportId/status"
 
-$getReportStatusResponse = Invoke-RestMethod -Uri $getReportStatusUrl `
-	-Method Get `
-	-Header $authorizationHeader
+$getReportStatusResponse = curl -s -H "Authorization: Bearer $accessToken" $getReportStatusUrl | ConvertFrom-Json
 
 while ($getReportStatusResponse.status.value -ne 'Created') {
 	write-verbose "  Waiting for report completion..."
 	Start-Sleep -seconds $waitForCompletionSleepTimeInSeconds
-	$getReportStatusResponse = Invoke-RestMethod -Uri $getReportStatusUrl `
-		-Method Get `
-		-Header $authorizationHeader
+	$getReportStatusResponse = curl -s -H "Authorization: Bearer $accessToken" $getReportStatusUrl | ConvertFrom-Json
 }
 
 write-verbose 'Step 7: Fetching XML report...'
 $fetchReportUrl = "$checkmarxBaseUrl/cxrestapi/reports/sastScan/$reportId"
 
-$fetchReportResponse = Invoke-RestMethod -Uri $fetchReportUrl `
-	-Method Get `
-	-Header $authorizationHeader
+$fetchReportResponse = curl -s -H "Authorization: Bearer $accessToken" $fetchReportUrl
 
 $reportOutputPath = $scanRequestConfig.request.resultfilepath
 write-verbose "Saving report to $reportOutputPath..."
