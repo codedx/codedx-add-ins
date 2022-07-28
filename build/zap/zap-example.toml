@@ -63,7 +63,8 @@ shellCmd = '''
 		-logFile /opt/codedx/zap/logs/tool.log \
 		-scanRequestFile /opt/codedx/zap/work/config/request.toml \
 		-zapStdoutLogFile /opt/codedx/zap/logs/zap.out.log \
-		-zapStderrLogFile /opt/codedx/zap/logs/zap.err.log
+		-zapStderrLogFile /opt/codedx/zap/logs/zap.err.log \
+		-scanMode normal
 '''
 
 # The post-shell cmd is an optional command to run after the shell command 

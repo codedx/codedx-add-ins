@@ -118,11 +118,11 @@ func ConfigureContext(zap *zap.Interface, cfg *Config) (Context, error) {
 		return ctx, err
 	}
 
-	if err := addContextIncludes(cfg, zap); err != nil {
+	if err := addContextIncludes(cfg.Context.IncludeRegularExpressions, cfg.Context.Name, zap); err != nil {
 		return ctx, err
 	}
 
-	if err := addContextExcludes(cfg, zap); err != nil {
+	if err := addContextExcludes(cfg.Context.ExcludeRegularExpressions, cfg.Context.Name, zap); err != nil {
 		return ctx, err
 	}
 
@@ -134,7 +134,7 @@ func ConfigureContext(zap *zap.Interface, cfg *Config) (Context, error) {
 
 	if cfg.useFormAuthentication() {
 
-		if err := configureFormsAuthentication(cfg, zap, &ctx); err != nil {
+		if err := configureFormsAuthentication(cfg.FormAuthentication, zap, &ctx); err != nil {
 			return ctx, err
 		}
 		credentialString = "password=%s&username=%s&type=UsernamePasswordAuthenticationCredentials"
@@ -142,7 +142,7 @@ func ConfigureContext(zap *zap.Interface, cfg *Config) (Context, error) {
 
 	if cfg.useScriptAuthentication() {
 
-		if err := configureScriptAuthentication(cfg, zap, &ctx); err != nil {
+		if err := configureScriptAuthentication(cfg.ScriptAuthentication, "", zap, &ctx, true); err != nil {
 			return ctx, err
 		}
 		credentialString = "Password=%s&Username=%s&type=GenericAuthenticationCredentials"
@@ -159,37 +159,97 @@ func ConfigureContext(zap *zap.Interface, cfg *Config) (Context, error) {
 	return ctx, nil
 }
 
-func addContextIncludes(cfg *Config, zap *zap.Interface) error {
-	for _, e := range cfg.Context.IncludeRegularExpressions {
+func ConfigureApiScanContext(zap *zap.Interface, cfg *ApiConfig, authScriptFile string) (Context, error) {
+	var ctx Context
+
+	result, err := (*zap).Context().NewContext(cfg.Context.Name)
+	if err != nil {
+		return ctx, err
+	}
+
+	ctx.ContextName = cfg.Context.Name
+	ctx.ContextID, err = getZapStringResult("contextId", result)
+	if err != nil {
+		return ctx, err
+	}
+
+	if err := addContextIncludes(cfg.Context.IncludeRegularExpressions, cfg.Context.Name, zap); err != nil {
+		return ctx, err
+	}
+
+	if err := addContextExcludes(cfg.Context.ExcludeRegularExpressions, cfg.Context.Name, zap); err != nil {
+		return ctx, err
+	}
+
+	if !cfg.IsContextAuthRequired() {
+		return ctx, nil
+	}
+
+	var credentialString string
+
+	if cfg.UseFormAuthentication() {
+		if err := configureFormsAuthentication(cfg.FormAuthentication, zap, &ctx); err != nil {
+			return ctx, err
+		}
+		credentialString = "password=%s&username=%s&type=UsernamePasswordAuthenticationCredentials"
+	}
+
+	if cfg.UseScriptAuthentication() {
+		if err := configureScriptAuthentication(cfg.ScriptAuthentication, authScriptFile, zap, &ctx, false); err != nil {
+			return ctx, err
+		}
+		credentialString = "Password=%s&Username=%s&type=GenericAuthenticationCredentials"
+	}
+
+	if _, err := (*zap).Authentication().SetLoggedInIndicator(ctx.ContextID, cfg.Authentication.LoginIndicatorRegex); err != nil {
+		return ctx, err
+	}
+
+	cred := cfg.credential
+	userID, err := addUser(zap, ctx.ContextID, cred.Username, cred.Password, credentialString)
+	if err != nil {
+		return ctx, err
+	}
+	user := User{
+		UserID:     userID,
+		Credential: *cred,
+	}
+	ctx.Users = append(ctx.Users, user)
+
+	return ctx, nil
+}
+
+func addContextIncludes(exps []string, contextName string, zap *zap.Interface) error {
+	for _, e := range exps {
 		if len(e) <= 0 {
 			continue
 		}
-		if _, err := (*zap).Context().IncludeInContext(cfg.Context.Name, e); err != nil {
+		if _, err := (*zap).Context().IncludeInContext(contextName, e); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func addContextExcludes(cfg *Config, zap *zap.Interface) error {
-	for _, e := range cfg.Context.ExcludeRegularExpressions {
+func addContextExcludes(exps []string, contextName string, zap *zap.Interface) error {
+	for _, e := range exps {
 		if len(e) <= 0 {
 			continue
 		}
-		if _, err := (*zap).Context().ExcludeFromContext(cfg.Context.Name, e); err != nil {
+		if _, err := (*zap).Context().ExcludeFromContext(contextName, e); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func configureFormsAuthentication(cfg *Config, zap *zap.Interface, ctx *Context) error {
+func configureFormsAuthentication(formAuth formAuthentication, zap *zap.Interface, ctx *Context) error {
 
 	loginRequestData := fmt.Sprintf("%s={%%username%%}&%s={%%password%%}",
-		cfg.FormAuthentication.FormUsernameFieldName,
-		cfg.FormAuthentication.FormPasswordFieldName)
+		formAuth.FormUsernameFieldName,
+		formAuth.FormPasswordFieldName)
 
-	antiCrossSiteRequestForgery := cfg.FormAuthentication.FormAntiCrossSiteRequestForgeryFieldName
+	antiCrossSiteRequestForgery := formAuth.FormAntiCrossSiteRequestForgeryFieldName
 	if len(antiCrossSiteRequestForgery) > 0 {
 		loginRequestData += fmt.Sprintf("&%s={%%token%%}", antiCrossSiteRequestForgery)
 
@@ -200,7 +260,7 @@ func configureFormsAuthentication(cfg *Config, zap *zap.Interface, ctx *Context)
 		}
 	}
 
-	extraPostData := cfg.FormAuthentication.FormExtraPostData
+	extraPostData := formAuth.FormExtraPostData
 	if len(extraPostData) > 0 {
 		if !strings.HasPrefix(extraPostData, "&") {
 			extraPostData = "&" + extraPostData
@@ -209,7 +269,7 @@ func configureFormsAuthentication(cfg *Config, zap *zap.Interface, ctx *Context)
 	}
 
 	loginRequestData = url.QueryEscape(loginRequestData)
-	formAuthConfigParams := fmt.Sprintf("loginUrl=%s&loginRequestData=%s", cfg.FormAuthentication.FormURL, loginRequestData)
+	formAuthConfigParams := fmt.Sprintf("loginUrl=%s&loginRequestData=%s", formAuth.FormURL, loginRequestData)
 	_, err := (*zap).Authentication().SetAuthenticationMethod(ctx.ContextID,
 		"formBasedAuthentication",
 		formAuthConfigParams)
@@ -217,22 +277,30 @@ func configureFormsAuthentication(cfg *Config, zap *zap.Interface, ctx *Context)
 	return err
 }
 
-func configureScriptAuthentication(cfg *Config, zap *zap.Interface, ctx *Context) error {
-
-	xf, err := ioutil.TempFile("", "authScript")
-	if err != nil {
-		return err
+func configureScriptAuthentication(scriptAuth scriptAuthentication, authScriptFile string, zap *zap.Interface, ctx *Context, deleteFile bool) error {
+	var xf *os.File
+	var err error
+	if authScriptFile == "" {
+		xf, err = ioutil.TempFile("", "authScript")
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if err := xf.Close(); err != nil {
+				log.Println(err)
+			}
+			if err := os.Remove(xf.Name()); err != nil {
+				log.Println(err)
+			}
+		}()
+	} else {
+		xf, err = os.Create(authScriptFile)
+		if err != nil {
+			return err
+		}
 	}
-	defer func() {
-		if err := xf.Close(); err != nil {
-			log.Println(err)
-		}
-		if err := os.Remove(xf.Name()); err != nil {
-			log.Println(err)
-		}
-	}()
 
-	if _, err = xf.WriteString(cfg.ScriptAuthentication.AuthenticationScriptContent); err != nil {
+	if _, err = xf.WriteString(scriptAuth.AuthenticationScriptContent); err != nil {
 		return err
 	}
 
@@ -243,6 +311,8 @@ func configureScriptAuthentication(cfg *Config, zap *zap.Interface, ctx *Context
 	_, err = (*zap).Authentication().SetAuthenticationMethod(ctx.ContextID,
 		"scriptBasedAuthentication",
 		"scriptName=authScript")
+
+	log.Println("Created /zap/wrk/authScript")
 
 	return err
 }
@@ -511,6 +581,16 @@ func SaveReport(zap *zap.Interface, xsltProgram string, outputFile string, minim
 
 	err = f.Close()
 	if err != nil {
+		return err
+	}
+	return ApplyXslt(xsltProgram, outputFile, minimumRiskCode, minimumConfidence)
+}
+
+func ApplyXslt(xsltProgram string, outputFile string, minimumRiskCode int, minimumConfidence int) error {
+
+	f, err := os.Open(outputFile)
+	if err != nil {
+		log.Println("save report; err4.1")
 		return err
 	}
 

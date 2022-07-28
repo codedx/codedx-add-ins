@@ -1,0 +1,118 @@
+# This Add-in Tool allows you to specify one or more workflow secrets for application login
+# credentials by specifying a username and password field for each one.
+#
+
+[context]
+target = ""                                   # the target definition for API scanning
+format = ""                                   # the type of the api scan target; one of openapi, soap, or graphql
+openApiHostnameOverride = ""                  # the OpenAPI host override given to zap-api-scan
+includeRegularExpressions = []                # list of regular expressions identifying URL patterns that are to be included
+excludeRegularExpressions = []                # list of regular expressions identifying URL patterns that are to be excluded
+
+[scanOptions]
+runActiveScan = false                         # the decision to run an active scan (when true)
+
+# CLI options passed to the zap-api-scan.py script. Note that several options are not available depending on
+# configuration, as they are already in use by the ZAP runner:
+# -t, -f, and -x are always in use.
+# -n is used when script or form authentication are used, or when include/exclude regular expressions are defined.
+# -U is used when script or form authenttication are used
+# a --hook file is used when script authentication is used
+# -O is used when an openApiHostnameOverride is defined
+# -S is used when runActiveScan is disabled
+#
+apiScanOptions = []
+
+apiScanConfigContent = ""                     # the content of an API Scan rule config file
+
+[reportOptions]
+minRiskThreshold = 0                          # the minimum risk code for ZAP report findings
+minConfThreshold = 0                          # the minimum confidence for ZAP report findings
+
+[authentication]
+type = "none"                                 # the authentication type: none, headerAuthentication, formAuthentication, or scriptAuthentication
+loginIndicatorRegex = ""                      # the regex to to indicate a successful login request
+
+# Ignored when authentication.type is not 'headerAuthentication'. The header value must be
+# provided as a secret named 'header-value'. Only a single authentication header value can
+# be given.
+#
+[headerAuthentication]
+authHeaderName = ""                           # the name of the authentication header; ZAP will use "Authorization" if one is not provided
+authHeaderSite = ""                           # when provided, limits the inclusion of the authorization header to this site
+
+# ignored when authentication.type is not 'formAuthentication'. The username and password
+# must be provided as secrets named 'username' and 'password'. Only a single set of form
+# authentication credentials may be given.
+#
+[formAuthentication]
+formURL = ""                                  # the URL of the login form for forms authentication
+formUsernameFieldName = ""                    # the login form's username field name
+formPasswordFieldName = ""                    # the login form's password field name
+formAntiCrossSiteRequestForgeryFieldName = "" # the anti-XSRF token field name
+formExtraPostData = ""                        # the extra data to include with login request
+
+# ignored when authentication.type is not 'scriptAuthentication'. The username and password
+# must be provided as secrets named 'username' and 'password'. Only a single set of form
+# authentication credentials may be given.
+#
+[scriptAuthentication]
+authenticationScriptContent = ""              # the ZEST script for script authentication
+
+[request] # (reserved for Code Dx use)
+
+# The image name contains the Docker image that handles this scan request file.
+#
+imageName = "codedx-zaprunner:v1.0"
+
+# The work directory stores k8s secrets, trusted CA certificates,a copy of the scan request
+# file, and the exit code file. The user running the Docker image *must* have write access
+# to the work directory.
+#
+# $workDirectory/analysis-exit-code  - exit code of the shell command
+# $workDirectory/ca-certificates     - trusted CA certificates
+# $workDirectory/config/request.toml - a copy of the scan request file
+# $workDirectory/input               - analysis input
+# $workDirectory/workflow-secrets    - workflow secrets
+#
+workDirectory = "/opt/codedx/zap/work"
+
+# The pre-shell cmd is an optional command to run before the shell command. The
+# shell command will not run if the pre-shell command exit code is non-zero.
+#
+preShellCmd = '''
+	echo "Time now is $(date)"
+'''
+
+# The shell cmd to run as the entry point for the tool.
+#
+shellCmd = '''
+	/opt/codedx/zap/bin/zap \
+		-zapPath /zap/zap.sh \
+		-output /opt/codedx/zap/work/output/zap.output.xml \
+		-xsltProgram /usr/bin/xsltproc \
+		-logFile /opt/codedx/zap/logs/tool.log \
+		-scanRequestFile /opt/codedx/zap/work/config/request.toml \
+		-zapStdoutLogFile /opt/codedx/zap/logs/zap.out.log \
+		-zapStderrLogFile /opt/codedx/zap/logs/zap.err.log \
+		-scanMode api
+'''
+
+# The post-shell cmd is an optional command to run after the shell command
+# completes. The post-shell cmd will not run if the shell command returns a
+# non-zero exit code. The exit code of the post-shell command will be the
+# overall exit code if the post-shell command runs.
+#
+postShellCmd = '''
+	echo "Time now is $(date)"
+'''
+
+# The log file path list contains zero or more log files for the tool run. Log
+# files get copied to workflow storage and are accessible from the tool service API.
+#
+logFilePaths   = ["/opt/codedx/zap/logs/tool.log", "/opt/codedx/zap/logs/zap.err.log", "/opt/codedx/zap/logs/zap.out.log", "/opt/codedx/zap/work/zap.out"]
+
+# The result file contains the tool output provided to Code Dx.
+#
+resultFilePath = "/opt/codedx/zap/work/output/zap.output.xml"
+
