@@ -32,9 +32,27 @@ imageName = "codedx-checkmarxrunner:v1.0"
 #
 workDirectory = "/opt/codedx/checkmarx/work"
 
+# The pre-shell cmd is an optional command to run before the shell command. The
+# shell command will not run if the pre-shell command exit code is non-zero.
+#
+preShellCmd = '''
+    cp ../work/ca-certificates/project/* /usr/local/share/ca-certificates
+    wd=$(pwd)
+    cd /usr/local/share/ca-certificates/
+    # Rename all files within ca-certificates to have a .crt extension
+    for f in *; do
+        mv -- "$f" "${f%.*}.crt"
+    done
+    update-ca-certificates
+    cd $wd
+'''
+
 # The shell cmd to run as the entry point for the tool.
 #
-shellCmd = "pwsh /opt/codedx/checkmarx/bin/Checkmarx.ps1 /opt/codedx/checkmarx/work/config/request.toml"
+shellCmd = '''
+    chroot --userspec=checkmarx:1000 / \
+        pwsh /opt/codedx/checkmarx/bin/Checkmarx.ps1 /opt/codedx/checkmarx/work/config/request.toml
+'''
 
 # The result file contains the tool output provided to Code Dx.
 #

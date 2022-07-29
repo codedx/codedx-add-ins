@@ -17,7 +17,7 @@ Set-PSDebug -Strict
 $ErrorActionPreference = 'Stop'
 $VerbosePreference = 'Continue'
 
-. ./add-in.ps1
+. $PSScriptRoot/add-in.ps1
 
 write-verbose "Reading scan request file ($scanRequestFilePath)..."
 $scanRequestConfig = Get-Config $scanRequestFilePath
@@ -144,5 +144,12 @@ $fetchReportResponse = Invoke-RestMethod -Uri $fetchReportUrl `
 $reportOutputPath = $scanRequestConfig.request.resultfilepath
 write-verbose "Saving report to $reportOutputPath..."
 
-$reportStart = $fetchReportResponse.IndexOf('<?xml ')
-[io.file]::WriteAllText($reportOutputPath, $fetchReportResponse.Substring($reportStart))
+# Due to 'Invoke-RestMethod' possibly converting a string response into a more representative data type, and we want to work with a String,
+# convert XML back to String
+if ($fetchReportResponse -is [xml]) {
+	[string] $fetchReportStrResponse = $fetchReportResponse.OuterXml
+}
+
+$reportStart = $fetchReportStrResponse.IndexOf('<?xml ')
+
+[io.file]::WriteAllText($reportOutputPath, $fetchReportStrResponse.Substring($reportStart))
